@@ -1,0 +1,16 @@
+{
+  "name": "quiz-platform",
+  "version": "1.0.0",
+  "description": "Real-time quiz platform with WebSocket (Kahoot-style)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.16.0",
+    "qrcode": "^1.5.3",
+    "uuid": "^9.0.0"
+  }
+}

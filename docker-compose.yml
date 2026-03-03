@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  quiz-app:
+    build: .
+    container_name: quiz-platform
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    restart: unless-stopped
+    volumes:
+      - ./public:/app/public:ro
+    networks:
+      - quiz-network
+
+networks:
+  quiz-network:
+    driver: bridge
