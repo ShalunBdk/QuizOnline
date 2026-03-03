@@ -13,8 +13,8 @@ services:
     volumes:
       - ./public:/app/public:ro
     networks:
-      - quiz-network
+      - glpi-ssl_glpi-network
 
 networks:
-  quiz-network:
-    driver: bridge
+  glpi-ssl_glpi-network:
+    external: true
