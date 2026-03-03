@@ -12,8 +12,12 @@ services:
     restart: unless-stopped
     volumes:
       - ./public:/app/public:ro
+      - quiz-data:/app/data
     networks:
       - glpi-ssl_glpi-network
+
+volumes:
+  quiz-data:
 
 networks:
   glpi-ssl_glpi-network:

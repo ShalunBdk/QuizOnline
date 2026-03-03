@@ -905,6 +905,8 @@ h1, h2, h3 { font-family: var(--font-display); }
   background: var(--surface);
   border-radius: 8px;
   overflow: hidden;
+  display: flex;
+  align-items: center;
 }
 .result-bar-fill {
   height: 100%;
@@ -964,6 +966,7 @@ h1, h2, h3 { font-family: var(--font-display); }
       <button class="tab active" onclick="switchHostTab('editor')">Редактор</button>
       <button class="tab" onclick="switchHostTab('lobby')">Лобби</button>
       <button class="tab" onclick="switchHostTab('live')">Управление</button>
+      <button class="tab" onclick="switchHostTab('results')">Результаты</button>
     </div>
   </div>
 
@@ -973,10 +976,25 @@ h1, h2, h3 { font-family: var(--font-display); }
       <div style="margin:20px 0; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
         <h3>Вопросы</h3>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" onclick="createNewQuiz()" style="font-size:14px; padding:10px 16px;">📝 Новый квиз</button>
           <button class="btn btn-secondary" onclick="addQuestion()" style="font-size:14px; padding:10px 16px;">+ Добавить вопрос</button>
           <button class="btn btn-secondary" onclick="importQuestions()" style="font-size:14px; padding:10px 16px;">📋 Импорт JSON</button>
         </div>
       </div>
+      
+      <div id="quiz-url-display" style="display:none; margin-bottom:16px; padding:12px; background:var(--surface2); border-radius:12px; border:1px solid var(--border);">
+        <div style="font-size:13px; color:var(--text-dim); margin-bottom:4px;">Ссылка для редактирования (сохраните её!):</div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input class="input" id="quiz-url" readonly style="flex:1; font-family:var(--font-mono); font-size:13px;">
+          <button class="btn btn-secondary" onclick="copyQuizUrl()" style="padding:10px 16px; font-size:13px;">📋 Копировать</button>
+        </div>
+      </div>
+      
+      <div id="quiz-metadata" style="margin-bottom:16px;">
+        <input class="input" type="text" id="quizTitle" placeholder="Название квиза" style="margin-bottom:8px;">
+        <input class="input" type="text" id="quizDescription" placeholder="Описание (необязательно)">
+      </div>
+      
       <div id="questions-container"></div>
 
       <div class="card" style="margin-top:20px;">
@@ -985,11 +1003,29 @@ h1, h2, h3 { font-family: var(--font-display); }
           <label>Время на вопрос (сек)</label>
           <input class="input" type="number" id="questionTime" value="20" min="5" max="120">
         </div>
+        <div class="settings-row">
+          <label>Перемешивать варианты ответов</label>
+          <input type="checkbox" id="shuffleAnswers" checked style="width:auto; height:20px; cursor:pointer;">
+        </div>
       </div>
 
-      <div style="margin-top:20px; display:flex; gap:12px;">
+      <div class="card" style="margin-top:20px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+          <h3>📊 Финальный опрос</h3>
+          <button class="btn btn-secondary" onclick="toggleSurveyEditor()" style="font-size:13px; padding:8px 16px;">
+            <span id="survey-toggle-text">Настроить</span>
+          </button>
+        </div>
+        <div id="survey-editor" style="display:none;">
+          <p style="color:var(--text-dim); font-size:14px; margin-bottom:12px;">Опрос будет показан участникам после завершения квиза</p>
+          <div id="survey-questions-container"></div>
+          <button class="btn btn-secondary" onclick="addSurveyQuestion()" style="font-size:14px; padding:10px 16px; margin-top:12px;">+ Добавить вопрос</button>
+        </div>
+      </div>
+      <div style="margin-top:20px; display:flex; gap:12px; flex-wrap:wrap;">
         <button class="btn btn-primary btn-large" onclick="createSession()" style="flex:1;">🚀 Создать сессию</button>
-        <button class="btn btn-secondary" onclick="exportQuestions()" style="padding:18px;">💾</button>
+        <button class="btn btn-secondary" onclick="saveQuizToDB()" style="padding:18px 40px;">💾 Сохранить</button>
+        <button class="btn btn-secondary" onclick="exportQuestions()" style="padding:18px;">📤</button>
       </div>
     </div>
 
@@ -1004,6 +1040,17 @@ h1, h2, h3 { font-family: var(--font-display); }
     <div id="host-live" class="host-tab" style="display:none;">
       <div class="host-live" id="live-content">
         <p style="color:var(--text-dim); margin-top:40px;">Квиз ещё не начался</p>
+      </div>
+    </div>
+
+    <!-- Results Tab -->
+    <div id="host-results" class="host-tab" style="display:none;">
+      <div class="container">
+        <div style="margin:20px 0;">
+          <h3>📊 Результаты опросов</h3>
+          <p style="color:var(--text-dim); font-size:14px; margin-top:8px;">История результатов финальных опросов для этого квиза</p>
+        </div>
+        <div id="survey-results-list"></div>
       </div>
     </div>
   </div>
@@ -1064,8 +1111,21 @@ function showPage(page) {
 const path = window.location.pathname;
 const params = new URLSearchParams(window.location.search);
 if (path.includes('/host')) showPage('host');
-else if (path.includes('/play')) showPage('player');
-else if (path.includes('/screen')) showPage('screen');
+else if (path.includes('/play')) {
+  showPage('player');
+  // Try to auto-reconnect if session exists
+  setTimeout(() => tryAutoReconnect(), 500);
+}
+else if (path.includes('/screen')) {
+  showPage('screen');
+  // Auto-connect if code is in URL
+  const code = params.get('code');
+  if (code) {
+    document.getElementById('screenCode').value = code.toUpperCase();
+    // Connect after a short delay to ensure page is ready
+    setTimeout(() => joinScreen(), 500);
+  }
+}
 
 // ── WebSocket ──────────────────────────────────────────
 function connectWS() {
@@ -1108,6 +1168,19 @@ function handleMessage(msg) {
     case 'joined':
       playerState.id = msg.playerId;
       playerState.name = msg.name;
+      
+      // Save to localStorage for reconnection
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      if (code) {
+        localStorage.setItem('playerSession', JSON.stringify({
+          code: code.toUpperCase(),
+          playerId: msg.playerId,
+          name: msg.name,
+          timestamp: Date.now()
+        }));
+      }
+      
       showPlayerLobby();
       break;
 
@@ -1143,7 +1216,12 @@ function handleMessage(msg) {
       break;
 
     case 'survey':
-      if (currentPage === 'player') showPlayerSurvey(msg.questions);
+      if (currentPage === 'player') {
+        // Store survey questions for validation
+        if (!currentQuestionData) currentQuestionData = {};
+        currentQuestionData.survey = { questions: msg.questions };
+        showPlayerSurvey(msg.questions);
+      }
       if (currentPage === 'screen') showScreenSurveyWaiting(msg.questions);
       break;
 
@@ -1254,10 +1332,15 @@ async function createSession() {
 
   await connectWS();
   const time = parseInt(document.getElementById('questionTime').value) || 20;
+  const shuffleAnswers = document.getElementById('shuffleAnswers').checked;
+  const survey = surveyQuestions.length > 0 ? { questions: surveyQuestions } : null;
+  
   send({
     type: 'create_session',
+    quizId: currentQuizId,
     questions: questions,
-    settings: { questionTime: time }
+    settings: { questionTime: time, shuffleAnswers },
+    survey: survey
   });
 }
 
@@ -1277,10 +1360,20 @@ async function loadLobby() {
         <div class="player-list" id="lobby-players"></div>
       </div>
     </div>
-    <button class="btn btn-primary btn-large" onclick="startQuiz()" style="width:100%; margin-top:20px;">
-      ▶ Начать квиз
-    </button>
+    <div style="display:flex; gap:12px; margin-top:20px;">
+      <button class="btn btn-secondary" onclick="openPresentationScreen()" style="flex:1;">
+        📺 Открыть экран для зрителей
+      </button>
+      <button class="btn btn-primary btn-large" onclick="startQuiz()" style="flex:2;">
+        ▶ Начать квиз
+      </button>
+    </div>
   `;
+}
+
+function openPresentationScreen() {
+  const url = `${window.location.origin}/screen?code=${sessionCode}`;
+  window.open(url, '_blank', 'width=1920,height=1080');
 }
 
 function updateLobbyPlayers(players, count) {
@@ -1314,6 +1407,7 @@ function showHostQuestion(msg) {
     <div class="answer-progress" id="host-answer-progress">0 / ?</div>
     <p style="color:var(--text-dim);">ответили</p>
     <div class="host-controls">
+      <button class="btn btn-secondary" onclick="openPresentationScreen()" style="margin-right:8px;">📺 Экран</button>
       <button class="btn btn-danger" onclick="send({type:'end_question',code:sessionCode})">⏹ Завершить вопрос</button>
     </div>
   `;
@@ -1341,9 +1435,12 @@ function showHostResults(msg) {
     <h3 style="margin-bottom:20px;">Результаты вопроса</h3>
     <p style="color:var(--text-dim); margin-bottom:20px;">✅ ${msg.stats.correct} из ${msg.stats.total} правильно</p>
     <div class="leaderboard">${lb}</div>
-    <button class="btn btn-primary btn-large" onclick="send({type:'next_question',code:sessionCode})" style="margin-top:24px;">
-      Следующий вопрос ▶
-    </button>
+    <div style="display:flex; gap:12px; margin-top:24px;">
+      <button class="btn btn-secondary" onclick="openPresentationScreen()">📺 Экран</button>
+      <button class="btn btn-primary btn-large" onclick="send({type:'next_question',code:sessionCode})" style="flex:1;">
+        Следующий вопрос ▶
+      </button>
+    </div>
   `;
 }
 
@@ -1393,17 +1490,26 @@ function showHostGameOver(msg) {
     </div>
   `).join('');
 
-  document.getElementById('live-content').innerHTML = `
-    <h2 style="margin-bottom:24px;">🏆 Квиз завершён!</h2>
-    <div class="leaderboard">${lb}</div>
+  const hasSurvey = surveyQuestions.length > 0;
+  const surveyButton = hasSurvey ? `
     <button class="btn btn-primary btn-large" onclick="startSurvey()" style="margin-top:24px; width:100%;">
       📋 Запустить опрос
     </button>
+  ` : '';
+
+  document.getElementById('live-content').innerHTML = `
+    <h2 style="margin-bottom:24px;">🏆 Квиз завершён!</h2>
+    <div class="leaderboard">${lb}</div>
+    ${surveyButton}
   `;
 }
 
 function startSurvey() {
-  send({ type: 'start_survey', code: sessionCode, survey: defaultSurvey });
+  const survey = surveyQuestions.length > 0 
+    ? { questions: surveyQuestions } 
+    : defaultSurvey;
+    
+  send({ type: 'start_survey', code: sessionCode, survey });
   document.getElementById('live-content').innerHTML = `
     <h2 style="margin-bottom:12px;">📋 Опрос запущен</h2>
     <div class="answer-progress" id="survey-progress">0 / ?</div>
@@ -1434,12 +1540,14 @@ let surveyAnswers = {};
 function showPlayerSurvey(questions) {
   surveyAnswers = {};
   const html = questions.map((q, qi) => {
+    const required = q.type === 'rating' ? '<span style="color:var(--danger);">*</span>' : '';
+    
     if (q.type === 'rating') {
       const stars = Array.from({length: q.max}, (_, i) => `
         <button class="star-btn" onclick="setSurveyRating(${qi}, ${i+1})" id="star-${qi}-${i+1}">${i+1}</button>
       `).join('');
       return `<div class="survey-question">
-        <h4>${escHtml(q.text)}</h4>
+        <h4>${escHtml(q.text)} ${required}</h4>
         <div class="rating-stars">${stars}</div>
       </div>`;
     } else if (q.type === 'multi_choice') {
@@ -1462,6 +1570,9 @@ function showPlayerSurvey(questions) {
   document.getElementById('player-content').innerHTML = `
     <div style="max-width:500px; width:100%; text-align:left;">
       <h2 style="text-align:center; margin-bottom:20px;" class="glow-text">📋 Опрос</h2>
+      <p style="text-align:center; color:var(--text-dim); font-size:14px; margin-bottom:20px;">
+        <span style="color:var(--danger);">*</span> - обязательные вопросы
+      </p>
       ${html}
       <button class="btn btn-primary btn-large" onclick="submitSurvey()" style="width:100%; margin-top:16px;">Отправить</button>
     </div>
@@ -1493,15 +1604,34 @@ function toggleSurveyChip(qi, oi, btn) {
 }
 
 function submitSurvey() {
+  // Validate that all rating questions are answered
+  const questions = currentQuestionData?.survey?.questions || [];
+  const missingAnswers = [];
+  
+  questions.forEach((q, qi) => {
+    if (q.type === 'rating' && !surveyAnswers[qi]) {
+      missingAnswers.push(`"${q.text}"`);
+    }
+  });
+  
+  if (missingAnswers.length > 0) {
+    alert('Пожалуйста, ответьте на все вопросы с оценкой:\n' + missingAnswers.join('\n'));
+    return;
+  }
+  
   send({ type: 'survey_response', answers: surveyAnswers });
 }
 
 function showPlayerSurveyThanks() {
+  // Clear session from localStorage
+  localStorage.removeItem('playerSession');
+  
   document.getElementById('player-content').innerHTML = `
     <div style="max-width:400px;">
       <h2 style="font-size:48px; margin-bottom:16px;">🙏</h2>
       <h2>Спасибо за обратную связь!</h2>
       <p style="color:var(--text-dim); margin-top:8px;">Ваши ответы помогут сделать следующие лекции ещё лучше</p>
+      <button class="btn btn-secondary" onclick="location.reload()" style="margin-top:24px;">Выйти</button>
     </div>
   `;
 }
@@ -1545,11 +1675,16 @@ function renderSurveyResults(results) {
         .sort((a, b) => b[1] - a[1])
         .map(([label, count]) => {
         const pct = Math.round((count / Math.max(r.total, 1)) * 100);
-        const width = Math.max(5, (count / maxCount) * 100);
+        const width = count === 0 ? 0 : Math.max(8, (count / maxCount) * 100);
+        const displayText = count === 0 ? '' : `${count} (${pct}%)`;
+        const barStyle = count === 0 
+          ? 'width:0%; background:transparent; padding:0;' 
+          : `width:${width}%; background:var(--accent);`;
         return `<div class="result-bar-row">
           <span class="result-bar-label">${escHtml(label)}</span>
           <div class="result-bar-track">
-            <div class="result-bar-fill" style="width:${width}%; background:var(--accent);">${count} (${pct}%)</div>
+            <div class="result-bar-fill" style="${barStyle}">${displayText}</div>
+            ${count === 0 ? '<span style="color:var(--text-dim); font-size:13px; padding-left:10px;">0 (0%)</span>' : ''}
           </div>
         </div>`;
       }).join('');
@@ -1580,6 +1715,62 @@ function switchHostTab(tab) {
   if (tab === 'editor') tabs[0]?.classList.add('active');
   if (tab === 'lobby') tabs[1]?.classList.add('active');
   if (tab === 'live') tabs[2]?.classList.add('active');
+  if (tab === 'results') {
+    tabs[3]?.classList.add('active');
+    loadSurveyResults();
+  }
+}
+
+async function loadSurveyResults() {
+  const container = document.getElementById('survey-results-list');
+  
+  if (!currentQuizId) {
+    container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:40px;">Сначала сохраните квиз, чтобы видеть результаты опросов</p>';
+    return;
+  }
+  
+  try {
+    const response = await fetch(`/api/quizzes/${currentQuizId}/survey-results`);
+    const results = await response.json();
+    
+    if (results.length === 0) {
+      container.innerHTML = '<p style="color:var(--text-dim); text-align:center; padding:40px;">Пока нет результатов опросов</p>';
+      return;
+    }
+    
+    container.innerHTML = results.map((result, idx) => {
+      const date = new Date(result.created_at).toLocaleString('ru-RU');
+      return `
+        <div class="card" style="margin-bottom:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h4 style="font-size:16px;">Сессия: ${result.session_code}</h4>
+            <span style="font-size:13px; color:var(--text-dim);">${date}</span>
+          </div>
+          <p style="font-size:14px; color:var(--text-dim); margin-bottom:12px;">Участников: ${result.player_count}</p>
+          <button class="btn btn-secondary" onclick="showSurveyResultDetails(${idx})" style="font-size:13px; padding:8px 16px;">
+            Показать результаты
+          </button>
+          <div id="survey-detail-${idx}" style="display:none; margin-top:16px;"></div>
+        </div>
+      `;
+    }).join('');
+    
+    // Store results for detail view
+    window.surveyResultsData = results;
+  } catch (e) {
+    container.innerHTML = '<p style="color:var(--danger); text-align:center; padding:40px;">Ошибка загрузки результатов</p>';
+  }
+}
+
+function showSurveyResultDetails(idx) {
+  const detailDiv = document.getElementById(`survey-detail-${idx}`);
+  if (detailDiv.style.display === 'none') {
+    const result = window.surveyResultsData[idx];
+    detailDiv.innerHTML = renderSurveyResults(result.aggregated_results).join('');
+    detailDiv.style.display = 'block';
+  } else {
+    detailDiv.style.display = 'none';
+  }
 }
 
 // ── PLAYER: Join ───────────────────────────────────────
@@ -1592,6 +1783,54 @@ async function joinSession() {
   await connectWS();
   playerState.name = name;
   send({ type: 'join', code, name });
+}
+
+async function tryAutoReconnect() {
+  const savedSession = localStorage.getItem('playerSession');
+  if (!savedSession) return false;
+  
+  try {
+    const session = JSON.parse(savedSession);
+    
+    // Check if session is not too old (30 minutes)
+    const age = Date.now() - session.timestamp;
+    if (age > 30 * 60 * 1000) {
+      localStorage.removeItem('playerSession');
+      return false;
+    }
+    
+    // Show reconnecting message
+    document.getElementById('player-content').innerHTML = `
+      <div class="player-join">
+        <h2>Переподключение...</h2>
+        <p style="color:var(--text-dim); margin-top:12px;">Восстанавливаем сессию для ${escHtml(session.name)}</p>
+        <div class="pulse-dot" style="margin:20px auto;"></div>
+      </div>
+    `;
+    
+    // Try to reconnect
+    await connectWS();
+    playerState.name = session.name;
+    send({ type: 'join', code: session.code, name: session.name });
+    
+    return true;
+  } catch (e) {
+    console.error('Auto-reconnect failed:', e);
+    localStorage.removeItem('playerSession');
+    
+    // Show error and reset to join form
+    document.getElementById('player-content').innerHTML = `
+      <div class="player-join">
+        <h2 class="glow-text">Войти в квиз</h2>
+        <p style="color:var(--danger); margin-bottom:16px;">Не удалось переподключиться. Войдите заново.</p>
+        <input class="input" id="playerCode" placeholder="Код сессии" maxlength="6" style="text-align:center; font-family:var(--font-mono); font-size:22px; letter-spacing:4px; text-transform:uppercase; margin-bottom:12px;">
+        <input class="input" id="playerName" placeholder="Ваше имя" style="margin-bottom:16px;">
+        <button class="btn btn-primary btn-large" onclick="joinSession()" style="width:100%;">Присоединиться</button>
+      </div>
+    `;
+    
+    return false;
+  }
 }
 
 function joinFromLanding() {
@@ -1705,6 +1944,7 @@ function showPlayerGameOver(msg) {
       <div class="score-display">${playerState.score}</div>
       <p style="color:var(--text-dim); font-size:20px;">Место: ${rank} из ${total}</p>
       ${rank === 1 ? '<p style="color:#ffd700; font-size:24px; margin-top:12px; font-weight:700;">Вы победитель! 🎉</p>' : ''}
+      <p style="color:var(--text-dim); font-size:14px; margin-top:24px;">Ожидайте опрос или результаты...</p>
     </div>
   `;
 }
@@ -1861,9 +2101,217 @@ function showScreenGameOver(msg) {
   `;
 }
 
+// ── Quiz Database Functions ────────────────────────────
+let currentQuizId = null;
+let surveyQuestions = [];
+
+function toggleSurveyEditor() {
+  const editor = document.getElementById('survey-editor');
+  const toggleText = document.getElementById('survey-toggle-text');
+  if (editor.style.display === 'none') {
+    editor.style.display = 'block';
+    toggleText.textContent = 'Скрыть';
+    if (surveyQuestions.length === 0) {
+      addSurveyQuestion();
+    }
+  } else {
+    editor.style.display = 'none';
+    toggleText.textContent = 'Настроить';
+  }
+}
+
+function addSurveyQuestion(data) {
+  const q = data || { type: 'rating', text: '', max: 5, options: [] };
+  surveyQuestions.push(q);
+  renderSurveyQuestions();
+}
+
+function removeSurveyQuestion(idx) {
+  surveyQuestions.splice(idx, 1);
+  renderSurveyQuestions();
+}
+
+function renderSurveyQuestions() {
+  const container = document.getElementById('survey-questions-container');
+  container.innerHTML = '';
+  
+  surveyQuestions.forEach((q, qi) => {
+    const div = document.createElement('div');
+    div.className = 'question-editor';
+    div.style.marginBottom = '12px';
+    
+    let optionsHtml = '';
+    if (q.type === 'multi_choice') {
+      const optionsText = (q.options || []).join('\n');
+      optionsHtml = `
+        <div style="margin-top:8px;">
+          <label style="font-size:13px; color:var(--text-dim);">Варианты (по одному на строку):</label>
+          <textarea class="textarea" onchange="updateSurveyOptions(${qi}, this.value)" style="min-height:80px;">${escHtml(optionsText)}</textarea>
+        </div>
+      `;
+    }
+    
+    div.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div class="q-number">Вопрос опроса #${qi + 1}</div>
+        <button class="remove-q" onclick="removeSurveyQuestion(${qi})" title="Удалить">✕</button>
+      </div>
+      <select class="input" onchange="surveyQuestions[${qi}].type=this.value; renderSurveyQuestions();" style="margin-bottom:8px;">
+        <option value="rating" ${q.type === 'rating' ? 'selected' : ''}>Оценка (звёзды)</option>
+        <option value="multi_choice" ${q.type === 'multi_choice' ? 'selected' : ''}>Множественный выбор</option>
+        <option value="text" ${q.type === 'text' ? 'selected' : ''}>Текстовый ответ</option>
+      </select>
+      <input class="input" placeholder="Текст вопроса" value="${escHtml(q.text)}" onchange="surveyQuestions[${qi}].text=this.value" style="margin-bottom:8px;">
+      ${optionsHtml}
+    `;
+    container.appendChild(div);
+  });
+}
+
+function updateSurveyOptions(qi, value) {
+  surveyQuestions[qi].options = value.split('\n').map(o => o.trim()).filter(o => o);
+}
+
+
+function createNewQuiz() {
+  if (questions.length > 0 && !confirm('Создать новый квиз? Несохранённые изменения будут потеряны.')) {
+    return;
+  }
+  
+  // Generate new quiz ID
+  currentQuizId = generateQuizId();
+  questions = [];
+  document.getElementById('quizTitle').value = '';
+  document.getElementById('quizDescription').value = '';
+  document.getElementById('questionTime').value = 20;
+  document.getElementById('shuffleAnswers').checked = true;
+  
+  renderQuestions();
+  addQuestion();
+  
+  // Update URL and show it
+  const url = `${window.location.origin}/host?quiz=${currentQuizId}`;
+  history.pushState({}, '', `/host?quiz=${currentQuizId}`);
+  document.getElementById('quiz-url').value = url;
+  document.getElementById('quiz-url-display').style.display = 'block';
+  
+  alert('✅ Новый квиз создан! Сохраните ссылку для редактирования.');
+}
+
+function generateQuizId() {
+  return 'quiz_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+}
+
+function copyQuizUrl() {
+  const input = document.getElementById('quiz-url');
+  input.select();
+  document.execCommand('copy');
+  alert('✅ Ссылка скопирована!');
+}
+
+async function saveQuizToDB() {
+  const title = document.getElementById('quizTitle').value.trim();
+  if (!title) {
+    alert('Введите название квиза');
+    return;
+  }
+  if (questions.length === 0) {
+    alert('Добавьте хотя бы один вопрос');
+    return;
+  }
+  
+  if (!currentQuizId) {
+    currentQuizId = generateQuizId();
+    const url = `${window.location.origin}/host?quiz=${currentQuizId}`;
+    history.pushState({}, '', `/host?quiz=${currentQuizId}`);
+    document.getElementById('quiz-url').value = url;
+    document.getElementById('quiz-url-display').style.display = 'block';
+  }
+
+  const description = document.getElementById('quizDescription').value.trim();
+  const time = parseInt(document.getElementById('questionTime').value) || 20;
+  const shuffleAnswers = document.getElementById('shuffleAnswers').checked;
+  
+  // Prepare survey if any questions exist
+  const survey = surveyQuestions.length > 0 ? { questions: surveyQuestions } : null;
+  
+  // Debug: log survey to console
+  if (survey) {
+    console.log('Saving survey:', JSON.stringify(survey, null, 2));
+  }
+
+  try {
+    const response = await fetch('/api/quizzes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: currentQuizId,
+        title,
+        description,
+        questions,
+        settings: { questionTime: time, shuffleAnswers },
+        survey
+      })
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      alert('✅ Квиз сохранён!');
+    } else {
+      alert('Ошибка: ' + data.error);
+    }
+  } catch (e) {
+    alert('Ошибка сохранения: ' + e.message);
+  }
+}
+
+async function loadQuizFromURL() {
+  const params = new URLSearchParams(window.location.search);
+  const quizId = params.get('quiz');
+  
+  if (!quizId) return;
+  
+  try {
+    const response = await fetch(`/api/quizzes/${quizId}`);
+    const quiz = await response.json();
+
+    if (quiz.error) {
+      alert('Квиз не найден. Создайте новый.');
+      return;
+    }
+
+    currentQuizId = quiz.id;
+    questions = quiz.questions;
+    surveyQuestions = quiz.survey?.questions || [];
+    document.getElementById('quizTitle').value = quiz.title;
+    document.getElementById('quizDescription').value = quiz.description || '';
+    document.getElementById('questionTime').value = quiz.settings.questionTime || 20;
+    document.getElementById('shuffleAnswers').checked = quiz.settings.shuffleAnswers !== false;
+
+    renderQuestions();
+    renderSurveyQuestions();
+    
+    // Show URL
+    const url = `${window.location.origin}/host?quiz=${currentQuizId}`;
+    document.getElementById('quiz-url').value = url;
+    document.getElementById('quiz-url-display').style.display = 'block';
+  } catch (e) {
+    console.error('Ошибка загрузки квиза:', e);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────
-// Start with one empty question in editor
-addQuestion();
+// Load quiz from URL if present, otherwise start with empty question
+if (window.location.pathname.includes('/host')) {
+  loadQuizFromURL().then(() => {
+    if (questions.length === 0) {
+      addQuestion();
+    }
+  });
+} else {
+  addQuestion();
+}
 </script>
+
 </body>
 </html>

@@ -4,6 +4,7 @@ const WebSocket = require('ws');
 const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const db = require('./db');
 
 const app = express();
 const server = http.createServer(app);
@@ -76,7 +77,15 @@ function calculateScore(isCorrect, timeElapsed, maxTime) {
 
 function sendQuestion(session) {
   const q = session.questions[session.currentQuestion];
-  const questionData = {
+  
+  session.state = 'question';
+  session.questionStartTime = Date.now();
+
+  // Clear previous timeout
+  if (session.questionTimeout) clearTimeout(session.questionTimeout);
+
+  // Send to host and presentation (original order)
+  const hostQuestionData = {
     type: 'question',
     index: session.currentQuestion,
     total: session.questions.length,
@@ -85,14 +94,42 @@ function sendQuestion(session) {
     time: session.settings.questionTime,
     image: q.image || null
   };
+  
+  sendTo(session.hostWs, hostQuestionData);
+  sendTo(session.presentationWs, hostQuestionData);
 
-  session.state = 'question';
-  session.questionStartTime = Date.now();
-
-  // Clear previous timeout
-  if (session.questionTimeout) clearTimeout(session.questionTimeout);
-
-  broadcast(session, questionData);
+  // Send to each player (with optional shuffling)
+  const shouldShuffle = session.settings.shuffleAnswers !== false; // Default true
+  
+  session.players.forEach((player, playerId) => {
+    let playerOptions = q.options;
+    let shuffleMap = null;
+    
+    if (shouldShuffle) {
+      // Create shuffled mapping
+      const indices = q.options.map((_, i) => i);
+      shuffleMap = shuffleArray([...indices]);
+      
+      // Store mapping for this player (shuffled index -> original index)
+      if (!player.shuffleMaps) player.shuffleMaps = {};
+      player.shuffleMaps[session.currentQuestion] = shuffleMap;
+      
+      // Create shuffled options array
+      playerOptions = shuffleMap.map(originalIndex => q.options[originalIndex]);
+    }
+    
+    const playerQuestionData = {
+      type: 'question',
+      index: session.currentQuestion,
+      total: session.questions.length,
+      text: q.text,
+      options: playerOptions,
+      time: session.settings.questionTime,
+      image: q.image || null
+    };
+    
+    sendTo(player.ws, playerQuestionData);
+  });
 
   // Send initial answer count
   sendTo(session.hostWs, {
@@ -110,6 +147,16 @@ function sendQuestion(session) {
   session.questionTimeout = setTimeout(() => {
     endQuestion(session);
   }, session.settings.questionTime * 1000 + 1000); // +1s buffer
+}
+
+// Fisher-Yates shuffle
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 function endQuestion(session) {
@@ -201,6 +248,8 @@ wss.on('connection', (ws) => {
       case 'create_session': {
         const session = createSession(ws);
         session.questions = msg.questions || [];
+        session.quizId = msg.quizId || null;
+        session.survey = msg.survey || null;
         if (msg.settings) {
           session.settings = { ...session.settings, ...msg.settings };
         }
@@ -230,21 +279,81 @@ wss.on('connection', (ws) => {
           sendTo(ws, { type: 'error', message: 'Сессия не найдена' });
           return;
         }
-        if (session.state !== 'lobby') {
-          sendTo(ws, { type: 'error', message: 'Квиз уже идёт' });
-          return;
-        }
-        playerId = uuidv4();
-        playerSession = session;
-        session.players.set(playerId, {
-          ws, name: msg.name || 'Аноним', score: 0, answers: {}
+        
+        console.log(`Join request: name="${msg.name}", session="${session.code}", state="${session.state}"`);
+        
+        // Check if player with this name already exists (reconnection)
+        let existingPlayer = null;
+        let existingPlayerId = null;
+        session.players.forEach((p, id) => {
+          if (p.name === msg.name) {
+            existingPlayer = p;
+            existingPlayerId = id;
+          }
         });
-        sendTo(ws, { type: 'joined', playerId, name: msg.name });
-        // Notify host & presentation
-        const playerNames = [];
-        session.players.forEach(p => playerNames.push(p.name));
-        sendTo(session.hostWs, { type: 'player_joined', name: msg.name, count: session.players.size, players: playerNames });
-        sendTo(session.presentationWs, { type: 'player_joined', name: msg.name, count: session.players.size, players: playerNames });
+        
+        if (existingPlayer) {
+          // Reconnection - update WebSocket connection
+          console.log(`Reconnection detected for player "${msg.name}"`);
+          playerId = existingPlayerId;
+          playerSession = session;
+          existingPlayer.ws = ws;
+          existingPlayer.disconnectedAt = null; // Clear disconnection flag
+          
+          sendTo(ws, { type: 'joined', playerId, name: msg.name });
+          
+          // Send current state based on session state
+          if (session.state === 'question' && session.currentQuestion >= 0) {
+            const q = session.questions[session.currentQuestion];
+            const shouldShuffle = session.settings.shuffleAnswers !== false;
+            let playerOptions = q.options;
+            
+            if (shouldShuffle && existingPlayer.shuffleMaps && existingPlayer.shuffleMaps[session.currentQuestion]) {
+              const shuffleMap = existingPlayer.shuffleMaps[session.currentQuestion];
+              playerOptions = shuffleMap.map(originalIndex => q.options[originalIndex]);
+            }
+            
+            sendTo(ws, {
+              type: 'question',
+              index: session.currentQuestion,
+              total: session.questions.length,
+              text: q.text,
+              options: playerOptions,
+              time: session.settings.questionTime,
+              image: q.image || null
+            });
+          } else if (session.state === 'results') {
+            // Player reconnected during results - they'll see it when it's broadcast
+          } else if (session.state === 'finished') {
+            const leaderboard = getLeaderboard(session);
+            sendTo(ws, { type: 'game_over', leaderboard });
+          }
+          
+          console.log(`Player ${msg.name} reconnected to session ${session.code}`);
+        } else {
+          // New player
+          if (session.state !== 'lobby') {
+            sendTo(ws, { type: 'error', message: 'Квиз уже идёт' });
+            return;
+          }
+          
+          playerId = uuidv4();
+          playerSession = session;
+          session.players.set(playerId, {
+            ws, 
+            name: msg.name || 'Аноним', 
+            score: 0, 
+            answers: {},
+            shuffleMaps: {}
+          });
+          sendTo(ws, { type: 'joined', playerId, name: msg.name });
+          
+          // Notify host & presentation
+          const playerNames = [];
+          session.players.forEach(p => playerNames.push(p.name));
+          sendTo(session.hostWs, { type: 'player_joined', name: msg.name, count: session.players.size, players: playerNames });
+          sendTo(session.presentationWs, { type: 'player_joined', name: msg.name, count: session.players.size, players: playerNames });
+        }
         break;
       }
 
@@ -287,10 +396,15 @@ wss.on('connection', (ws) => {
 
         const q = playerSession.questions[playerSession.currentQuestion];
         const elapsed = Date.now() - playerSession.questionStartTime;
-        const isCorrect = msg.option === q.correct;
+        
+        // Convert shuffled index back to original index
+        const shuffleMap = player.shuffleMaps?.[playerSession.currentQuestion];
+        const originalIndex = shuffleMap ? shuffleMap[msg.option] : msg.option;
+        
+        const isCorrect = originalIndex === q.correct;
         const score = calculateScore(isCorrect, elapsed, playerSession.settings.questionTime);
 
-        player.answers[playerSession.currentQuestion] = msg.option;
+        player.answers[playerSession.currentQuestion] = originalIndex;
         player.score += score;
 
         sendTo(ws, {
@@ -351,6 +465,18 @@ wss.on('connection', (ws) => {
           type: 'survey',
           questions: session.survey.questions
         });
+        
+        // Send initial survey count
+        sendTo(session.hostWs, {
+          type: 'survey_count',
+          count: 0,
+          total: session.players.size
+        });
+        sendTo(session.presentationWs, {
+          type: 'survey_count',
+          count: 0,
+          total: session.players.size
+        });
         break;
       }
 
@@ -388,6 +514,37 @@ wss.on('connection', (ws) => {
         const session = sessions.get(msg.code?.toUpperCase());
         if (!session || session.hostWs !== ws) return;
         const results = aggregateSurvey(session);
+        
+        console.log(`Survey results requested for session ${session.code}, quizId: ${session.quizId}, responses: ${session.surveyResponses.size}`);
+        
+        // Save results to database if quiz has ID
+        if (session.quizId && session.surveyResponses.size > 0) {
+          try {
+            const responses = [];
+            session.surveyResponses.forEach((answers, playerId) => {
+              const player = session.players.get(playerId);
+              responses.push({
+                playerId,
+                playerName: player ? player.name : 'Unknown',
+                answers
+              });
+            });
+            
+            db.saveSurveyResults(
+              session.quizId,
+              session.code,
+              session.players.size,
+              responses,
+              results
+            );
+            console.log(`Survey results saved to DB for quiz ${session.quizId}`);
+          } catch (e) {
+            console.error('Failed to save survey results:', e);
+          }
+        } else {
+          console.log(`Survey results NOT saved: quizId=${session.quizId}, responses=${session.surveyResponses.size}`);
+        }
+        
         sendTo(ws, { type: 'survey_results', results });
         sendTo(session.presentationWs, { type: 'survey_results', results });
         break;
@@ -397,13 +554,72 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (playerSession && playerId) {
-      playerSession.players.delete(playerId);
-      const playerNames = [];
-      playerSession.players.forEach(p => playerNames.push(p.name));
-      sendTo(playerSession.hostWs, { type: 'player_left', count: playerSession.players.size, players: playerNames });
-      sendTo(playerSession.presentationWs, { type: 'player_left', count: playerSession.players.size, players: playerNames });
+      const player = playerSession.players.get(playerId);
+      if (player) {
+        // Mark as disconnected instead of deleting immediately
+        player.disconnectedAt = Date.now();
+        player.ws = null;
+        console.log(`Player ${player.name} disconnected from session ${playerSession.code}`);
+        
+        // Delete after 5 minutes if not reconnected
+        setTimeout(() => {
+          const p = playerSession.players.get(playerId);
+          if (p && p.disconnectedAt && !p.ws) {
+            playerSession.players.delete(playerId);
+            console.log(`Player ${p.name} removed after timeout`);
+            const playerNames = [];
+            playerSession.players.forEach(pl => playerNames.push(pl.name));
+            sendTo(playerSession.hostWs, { type: 'player_left', count: playerSession.players.size, players: playerNames });
+            sendTo(playerSession.presentationWs, { type: 'player_left', count: playerSession.players.size, players: playerNames });
+          }
+        }, 5 * 60 * 1000); // 5 minutes
+      }
     }
   });
+});
+
+// ── Quiz CRUD API ──────────────────────────────────────
+// Save quiz
+app.post('/api/quizzes', (req, res) => {
+  try {
+    const { id, title, description, questions, settings, survey } = req.body;
+    if (!title || !questions || questions.length === 0) {
+      return res.status(400).json({ error: 'Title and questions are required' });
+    }
+    const quizId = id || uuidv4();
+    const quiz = db.saveQuiz(quizId, title, description, questions, settings || { questionTime: 20 }, survey);
+    res.json({ success: true, quiz });
+  } catch (e) {
+    console.error('Save quiz error:', e);
+    res.status(500).json({ error: 'Failed to save quiz' });
+  }
+});
+
+// Get quiz by ID
+app.get('/api/quizzes/:id', (req, res) => {
+  try {
+    const quiz = db.getQuiz(req.params.id);
+    if (!quiz) {
+      return res.status(404).json({ error: 'Quiz not found' });
+    }
+    res.json(quiz);
+  } catch (e) {
+    console.error('Get quiz error:', e);
+    res.status(500).json({ error: 'Failed to load quiz' });
+  }
+});
+
+// Get survey results for quiz
+app.get('/api/quizzes/:id/survey-results', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = parseInt(req.query.offset) || 0;
+    const results = db.getSurveyResults(req.params.id, limit, offset);
+    res.json(results);
+  } catch (e) {
+    console.error('Get survey results error:', e);
+    res.status(500).json({ error: 'Failed to load survey results' });
+  }
 });
 
 // ── QR Code endpoint ───────────────────────────────────

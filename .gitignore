@@ -1,6 +1,12 @@
 # Dependencies
 node_modules/
 
+# Database
+data/
+*.db
+*.db-shm
+*.db-wal
+
 # Logs
 logs
 *.log

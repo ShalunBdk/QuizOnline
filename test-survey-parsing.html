@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Survey Parsing</title>
+</head>
+<body>
+    <h1>Test Survey Options Parsing</h1>
+    
+    <h2>Input:</h2>
+    <textarea id="input" rows="5" cols="50">
+Вайбкодинг
+Сетевые цензоры в России и мире
+Как работает интернет
+    </textarea>
+    
+    <button onclick="testParse()">Parse</button>
+    
+    <h2>Output:</h2>
+    <pre id="output"></pre>
+    
+    <script>
+        function testParse() {
+            const value = document.getElementById('input').value;
+            const options = value.split('\n').map(o => o.trim()).filter(o => o);
+            
+            document.getElementById('output').textContent = JSON.stringify({
+                raw: value,
+                split: value.split('\n'),
+                trimmed: value.split('\n').map(o => o.trim()),
+                filtered: options,
+                count: options.length
+            }, null, 2);
+        }
+        
+        // Auto-test on load
+        testParse();
+    </script>
+</body>
+</html>
