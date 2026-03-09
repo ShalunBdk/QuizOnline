@@ -938,6 +938,102 @@ h1, h2, h3 { font-family: var(--font-display); }
   .screen-lobby .qr-section { flex-direction: column; gap: 30px; }
   .join-inline { flex-direction: column; }
 }
+
+/* Large screens (Full HD and above) */
+@media (min-width: 1920px) {
+  .screen-lobby h1 { font-size: 96px; }
+  
+  .screen-lobby .qr-big {
+    padding: 50px;
+    border-radius: 32px;
+  }
+  .screen-lobby .qr-big img { 
+    width: 500px; 
+    height: 500px; 
+  }
+  
+  .screen-lobby .join-info h2 {
+    font-size: 120px;
+    letter-spacing: 20px;
+  }
+  .screen-lobby .join-info p {
+    font-size: 32px;
+  }
+  
+  .screen-lobby .qr-section {
+    gap: 100px;
+    margin: 60px 0;
+  }
+  
+  .screen-players .player-chip {
+    font-size: 24px;
+    padding: 14px 32px;
+  }
+  
+  .screen-question h2 { font-size: 56px; }
+  .screen-question .question-index { font-size: 28px; }
+  .screen-option {
+    font-size: 32px;
+    padding: 32px;
+    min-height: 100px;
+  }
+  
+  .screen-results h2 { font-size: 56px; }
+  .leaderboard-item {
+    font-size: 28px;
+    padding: 24px 32px;
+  }
+  .leaderboard-item .rank { font-size: 36px; }
+  .leaderboard-item .score { font-size: 32px; }
+}
+
+/* Extra large screens (4K) */
+@media (min-width: 3840px) {
+  .screen-lobby h1 { font-size: 160px; }
+  
+  .screen-lobby .qr-big {
+    padding: 80px;
+    border-radius: 48px;
+  }
+  .screen-lobby .qr-big img { 
+    width: 800px; 
+    height: 800px; 
+  }
+  
+  .screen-lobby .join-info h2 {
+    font-size: 200px;
+    letter-spacing: 32px;
+  }
+  .screen-lobby .join-info p {
+    font-size: 56px;
+  }
+  
+  .screen-lobby .qr-section {
+    gap: 160px;
+    margin: 100px 0;
+  }
+  
+  .screen-players .player-chip {
+    font-size: 40px;
+    padding: 20px 48px;
+  }
+  
+  .screen-question h2 { font-size: 96px; }
+  .screen-question .question-index { font-size: 48px; }
+  .screen-option {
+    font-size: 56px;
+    padding: 48px;
+    min-height: 160px;
+  }
+  
+  .screen-results h2 { font-size: 96px; }
+  .leaderboard-item {
+    font-size: 48px;
+    padding: 36px 48px;
+  }
+  .leaderboard-item .rank { font-size: 64px; }
+  .leaderboard-item .score { font-size: 56px; }
+}
 </style>
 </head>
 <body>
