@@ -131,16 +131,17 @@ function sendQuestion(session) {
     sendTo(player.ws, playerQuestionData);
   });
 
-  // Send initial answer count
+  // Send initial answer count (only connected players)
+  const connectedPlayers = [...session.players.values()].filter(p => p.ws && p.ws.readyState === WebSocket.OPEN);
   sendTo(session.hostWs, {
     type: 'answer_count',
     answered: 0,
-    total: session.players.size
+    total: connectedPlayers.length
   });
   sendTo(session.presentationWs, {
     type: 'answer_count',
     answered: 0,
-    total: session.players.size
+    total: connectedPlayers.length
   });
 
   // Auto-end question after time
@@ -293,6 +294,14 @@ wss.on('connection', (ws) => {
         });
         
         if (existingPlayer) {
+          // Reconnection - only valid if player was disconnected (has disconnectedAt flag)
+          // This prevents players from old sessions being matched in new sessions
+          if (!existingPlayer.disconnectedAt) {
+            // Player is actively connected with same name - reject
+            sendTo(ws, { type: 'error', message: 'Игрок с таким именем уже в сессии' });
+            return;
+          }
+          
           // Reconnection - update WebSocket connection
           console.log(`Reconnection detected for player "${msg.name}"`);
           playerId = existingPlayerId;
@@ -416,14 +425,16 @@ wss.on('connection', (ws) => {
 
         // Notify host, presentation and all players of answer count
         let answeredCount = 0;
+        let connectedTotal = 0;
         playerSession.players.forEach(p => {
+          if (p.ws && p.ws.readyState === WebSocket.OPEN) connectedTotal++;
           if (p.answers[playerSession.currentQuestion] !== undefined) answeredCount++;
         });
         
         const countMsg = {
           type: 'answer_count',
           answered: answeredCount,
-          total: playerSession.players.size
+          total: connectedTotal
         };
         
         sendTo(playerSession.hostWs, countMsg);
@@ -436,8 +447,10 @@ wss.on('connection', (ws) => {
           }
         });
 
-        // Auto-end if all answered
-        if (answeredCount === playerSession.players.size) {
+        // Auto-end if all connected players answered
+        let connectedCount = 0;
+        playerSession.players.forEach(p => { if (p.ws && p.ws.readyState === WebSocket.OPEN) connectedCount++; });
+        if (connectedCount > 0 && answeredCount >= connectedCount) {
           endQuestion(playerSession);
         }
         break;
